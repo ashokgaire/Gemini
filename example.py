@@ -1,5 +1,9 @@
 import torch
 from gemini_torch import Gemini
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
 
 # Initialize the model
 model = Gemini(
@@ -21,10 +25,17 @@ model = Gemini(
 )
 
 # Initialize the text random tokens
-x = torch.randint(0, 50432, (1, 8192))
+x = torch.randint(0, 5432, (1, 100))
+model.to(device)
+x = x.to(device)
+
 
 # Apply model to x
 y = model(x)
+y = y.cpu()
+
+# Print logits
+print(y)
 
 # Print logits
 print(y)

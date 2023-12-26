@@ -1,9 +1,9 @@
+from ast import List
 import torch
 from torch.nn import Module
 from zeta.structs import AutoregressiveWrapper
-
 from gemini_torch.transformer import Decoder, Transformer
-from gemini_torch.utils import ImgToEmbeddings, AudioToEmbeddings
+from gemini_torch.utils import ImgToEmbeddings, AudioToEmbeddings,TreeEmbedding,HtmlToGraphEmbedding
 
 
 def exists(val):
@@ -103,9 +103,13 @@ class Gemini(Module):
             )
 
             # Takes in audio -> transforms it to the same dimension as the model
-            self.audio_to_lang_embedding = AudioToEmbeddings(
-                audio_seq_len=audio_seq_len, seqlen=num_tokens, dim=dim, *args, **kwargs
-            )
+            #self.audio_to_lang_embedding = AudioToEmbeddings(
+            #    audio_seq_len=audio_seq_len, seqlen=num_tokens, dim=dim, *args, **kwargs
+            #)
+            # Initialize HtmlToGraphEmbedding and TreeEmbedding modules
+            self.html_to_graph_embedding = HtmlToGraphEmbedding(input_dim=dim)
+            self.tree_embedding = TreeEmbedding(dim=dim, vocab_size=num_tokens)
+
 
         except Exception as e:
             print("Failed to initialize gemini: ", e)
@@ -115,7 +119,8 @@ class Gemini(Module):
         self,
         text: torch.Tensor,
         img: torch.Tensor = None,
-        audio: torch.Tensor = None,
+        #audio: torch.Tensor = None,
+        html: str = None,
         *args,
         **kwargs
     ):
@@ -125,33 +130,34 @@ class Gemini(Module):
         Args:
         - text: Text tensor
         - img: Image tensor
+        - audio: Audio tensor
+        - html: List of HTML token sequences
 
         Returns:
         - torch.Tensor: The output of the model
 
         Text input shape: [batch, seq_len, dim]
         img input shape: [batch, channels, height, width]
-        audio input shape: [batch, audio_seq_len]
+        #audio input shape: [batch, audio_seq_len]
+        html input shape: List[List[str]]
 
         Output shape: [batch, seq_len, dim]
-
-
         """
         try:
             # If image is provided, concat it with the text
-            if exists(img):
+            if exists(html):
+                x_text = self.decoder.forward(text)
+                x_graph = self.html_to_graph_embedding(html)
+                x_tree = self.tree_embedding(html)
+                #x_img = self.img_to_transformer(img)
+                x = torch.concat((x_text, x_graph, x_tree), dim=1)
+                model_input = self.decoder.forward(x)
+
+            # If HTML is provided, add graph and tree embeddings
+            elif exists(img):
                 img = self.img_to_transformer(img)
                 x = torch.concat((text, img), dim=1)
                 model_input = self.decoder.forward(x)
-
-            # Else, just use the text
-            elif exists(img) and exists(audio):
-                # Concat the audio and image and text embeddings all at once, audio is [batch, audio_seq_len]
-                x = self.audio_to_lang_embedding(audio)
-                x = self.img_to_transformer(img)
-                x = torch.concat((text, img, audio), dim=1)
-                model_input = self.decoder.forward(x)
-
             else:
                 model_input = self.decoder.forward(text)
 
@@ -159,3 +165,11 @@ class Gemini(Module):
         except Exception as e:
             print("Failed in forward method: ", e)
             raise
+
+''' If audio and image are provided, concatenate all embeddings
+elif exists(img) and exists(audio):
+    x_audio = self.audio_to_lang_embedding(audio)
+    x_img = self.img_to_transformer(img)
+    x = torch.concat((text, x_img, x_audio), dim=1)
+    model_input = self.decoder.forward(x)
+'''

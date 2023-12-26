@@ -115,7 +115,11 @@ __pypackages__/
 # Celery stuff
 celerybeat-schedule
 celerybeat.pid
-
+data/
+test_data/
+prepared_data/
+html_text_image_dataset/
+*html
 # SageMath parsed files
 *.sage.py
 

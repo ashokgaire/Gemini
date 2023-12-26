@@ -2,6 +2,12 @@ import torch
 from torch import nn
 from einops import rearrange
 
+import torch
+from torch import nn
+from torch_geometric.nn import GATConv
+from torch_geometric.data import Data
+import networkx as nx
+from bs4 import BeautifulSoup
 
 class ImgToEmbeddings(nn.Module):
     """ImgToEmbeddings
@@ -127,8 +133,124 @@ class ImgToEmbeddings(nn.Module):
         x = x.view(batch, self.seq_len, -1)
 
         return x
+class TreeEmbedding(nn.Module):
+    """TreeEmbedding for HTML DOM Tree
 
+    Args:
+        dim (int): Dimension of the embedding
+        vocab_size (int): Size of the vocabulary
 
+    Returns:
+        torch.Tensor: The output of the model
+
+    Input shape:
+        (batch, seq_len)  # assuming each sequence is a list of HTML tokens
+
+    Output shape:
+        (batch, seq_len, dim)
+
+    Example:
+        >>> import torch
+        >>> from geminix import TreeEmbedding
+        >>> model = TreeEmbedding(dim=128, vocab_size=256)
+        >>> x = [["<html>", "<body>", "<p>", "text", "</p>", "</body>", "</html>"]]
+        >>> offsets = torch.tensor([0, 7])
+        >>> y = model(x, offsets)
+        >>> y.shape
+        torch.Size([1, 7, 128])
+    """
+
+    def __init__(self, dim: int, vocab_size: int, *args, **kwargs):
+        super(TreeEmbedding, self).__init__()
+        self.dim = dim
+        self.vocab_size = vocab_size
+        self.embedding = nn.EmbeddingBag(vocab_size, dim, sparse=True)
+
+    def forward(self, sequences, offsets):
+        """Forward pass
+
+        Args:
+            sequences (List[List[str]]): List of lists representing sequences of HTML tokens
+            offsets (torch.Tensor): Offsets for each sequence in the batch
+
+        Returns:
+            torch.Tensor: Embedded representations of the HTML tokens
+        """
+        token_indices_list = [
+            torch.tensor([max(0, min(hash(token), self.vocab_size - 1)) for token in sequence])
+            for sequence in sequences
+        ]
+
+        sequence_lengths = [len(token_indices) for token_indices in token_indices_list]
+
+        token_indices_padded = nn.utils.rnn.pad_sequence(token_indices_list, batch_first=True, padding_value=0)
+
+        return self.embedding(token_indices_padded.flatten(), offsets).view(
+            token_indices_padded.size(0), token_indices_padded.size(1), -1
+        )
+
+class GraphAttentionLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, heads=1, dropout=0.6):
+        super(GraphAttentionLayer, self).__init__()
+        self.gat_conv = GATConv(in_channels, out_channels, heads=heads, dropout=dropout)
+
+    def forward(self, x, edge_index):
+        x = self.gat_conv(x, edge_index)
+        return x
+
+class GraphEmbeddingModel(nn.Module):
+    def __init__(self, input_dim, hidden_channels, out_channels):
+        super(GraphEmbeddingModel, self).__init__()
+        self.gat1 = GraphAttentionLayer(input_dim, hidden_channels)
+        self.gat2 = GraphAttentionLayer(hidden_channels * self.gat1.gat_conv.heads, out_channels)
+
+    def forward(self, node_features, edge_index):
+        h = self.gat1(node_features, edge_index)
+        h = nn.functional.elu(h)
+        h = self.gat2(h, edge_index)
+        return torch.mean(h, dim=0)
+
+class HtmlToGraphEmbedding(nn.Module):
+    def __init__(self, input_dim, hidden_channels=128, out_channels=64):
+        super(HtmlToGraphEmbedding, self).__init__()
+        self.graph_embedding_model = GraphEmbeddingModel(input_dim, hidden_channels, out_channels)
+
+    def forward(self, html):
+        graph = self.construct_graph_from_html(html)
+        graph_embedding = self.generate_graph_embedding(graph)
+        return graph_embedding
+
+    def construct_graph_from_html(self, html):
+        soup = BeautifulSoup(html, 'html.parser')
+        return self.construct_graph_from_tree(soup.body)
+
+    def construct_graph_from_tree(self, tree):
+        graph = nx.DiGraph()
+        mapping = {}
+
+        def add_edges_recursive(parent_id, node):
+            nonlocal graph
+            nonlocal mapping
+
+            if isinstance(node, str):
+                pass
+            else:
+                for child in node.children:
+                    child_id = mapping.setdefault(id(child), len(mapping))
+                    graph.add_edge(parent_id, child_id)
+                    add_edges_recursive(child_id, child)
+
+        root_id = mapping.setdefault(id(tree), len(mapping))
+        add_edges_recursive(root_id, tree)
+        return graph
+
+    def generate_graph_embedding(self, graph):
+        num_nodes = len(graph.nodes())
+        node_features = torch.eye(num_nodes)
+        edge_index = torch.tensor(list(graph.edges)).t().contiguous()
+
+        return self.graph_embedding_model(torch.tensor(node_features) if node_features is not None else torch.tensor(edge_index),
+                                           edge_index)
 class AudioToEmbeddings(nn.Module):
     """AudioToEmbeddings
 
